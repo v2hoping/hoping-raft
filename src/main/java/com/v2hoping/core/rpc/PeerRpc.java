@@ -10,7 +10,7 @@ import com.v2hoping.core.consensus.VoteResponse;
  *
  * @author houping wang
  */
-public interface Rpc {
+public interface PeerRpc {
 
     /**
      * 请求投票RPC

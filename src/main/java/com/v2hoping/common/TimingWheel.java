@@ -16,21 +16,23 @@ import java.util.concurrent.TimeUnit;
 public class TimingWheel {
 
     public static void main(String[] args) throws InterruptedException {
+        TimerTask timerTask = new TimerTask() {
+            @Override
+            public void run(Timeout timeout) throws Exception {
+                Integer delay = RandomUtils.nextInt(1, 3000);
+                System.out.println(delay);
+                timeout.timer().newTimeout(this, delay, TimeUnit.MILLISECONDS);
+            }
+        };
         long duration = TimeUnit.MILLISECONDS.toNanos(1);
-
         HashedWheelTimer hashedWheelTimer = new HashedWheelTimer(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
                 return new Thread(r, "线程" + System.currentTimeMillis());
             }
         }, 1, TimeUnit.MILLISECONDS, 1024);
-        System.out.println(System.currentTimeMillis());
-        hashedWheelTimer.newTimeout(new TimerTask() {
-            @Override
-            public void run(Timeout timeout) throws Exception {
-
-            }
-        }, 10000, TimeUnit.MILLISECONDS);
+        Integer delay = RandomUtils.nextInt(1, 3000);
+        hashedWheelTimer.newTimeout(timerTask, delay, TimeUnit.MILLISECONDS);
     }
 
 }

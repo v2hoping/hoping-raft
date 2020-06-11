@@ -1,7 +1,9 @@
 package com.v2hoping.rpc;
 
+import com.alibaba.fastjson.TypeReference;
 import com.alipay.sofa.rpc.config.ProviderConfig;
 import com.alipay.sofa.rpc.config.ServerConfig;
+import com.v2hoping.common.ConfigureLoader;
 import com.v2hoping.rpc.RpcImp;
 import com.v2hoping.rpc.RpcService;
 

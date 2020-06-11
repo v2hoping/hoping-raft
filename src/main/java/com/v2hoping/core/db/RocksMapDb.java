@@ -31,10 +31,10 @@ public class RocksMapDb implements MapDb {
         try {
             boolean mkdirs = new File(path).mkdirs();
             if (mkdirs) {
-                LOGGER.info("hoping-raft>>>>>>rocksdb数据库[" + path + "]目录创建");
+                LOGGER.info("[hoping-raft]Rocksdb数据库[" + path + "]目录创建");
             }
             db = RocksDB.open(new Options().setCreateIfMissing(true), path);
-            LOGGER.info("hoping-raft>>>>>>rocksdb数据库连接成功");
+            LOGGER.info("[hoping-raft]Rocksdb数据库连接成功");
         } catch (RocksDBException e) {
             LOGGER.error(e.getMessage(), e);
         }

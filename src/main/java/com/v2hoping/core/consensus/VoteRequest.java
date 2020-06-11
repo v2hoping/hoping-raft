@@ -15,7 +15,7 @@ public class VoteRequest {
     /**
      * 请求选票的候选人ID
      */
-    private Long candidateId;
+    private String candidateId;
 
     /**
      * 候选人最后日志条目的索引值
@@ -35,11 +35,11 @@ public class VoteRequest {
         this.term = term;
     }
 
-    public Long getCandidateId() {
+    public String getCandidateId() {
         return candidateId;
     }
 
-    public void setCandidateId(Long candidateId) {
+    public void setCandidateId(String candidateId) {
         this.candidateId = candidateId;
     }
 
