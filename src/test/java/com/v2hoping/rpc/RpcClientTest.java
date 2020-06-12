@@ -1,5 +1,6 @@
 package com.v2hoping.rpc;
 
+import com.alipay.remoting.InvokeCallbackListener;
 import com.alipay.sofa.rpc.api.future.SofaResponseFuture;
 import com.alipay.sofa.rpc.config.ConsumerConfig;
 import com.alipay.sofa.rpc.config.ServerConfig;
@@ -26,13 +27,7 @@ public class RpcClientTest {
 
         // 生成代理类
         RpcService helloService = consumerConfig.refer();
-        while (true) {
-            System.out.println("客户端:" + helloService.say("world"));
-            try {
-                Thread.sleep(2000);
-            } catch (Exception e) {
-            }
-        }
+        System.out.println("客户端:" + helloService.say("world"));
     }
 
     @Test
@@ -41,20 +36,20 @@ public class RpcClientTest {
                 .setInterfaceId(RpcService.class.getName()) // 指定接口
                 .setProtocol("bolt") // 指定协议
                 .setInvokeType("future")
+                .setTimeout(20000)
                 .setDirectUrl("bolt://127.0.0.1:12200"); // 指定直连地址
-
         // 生成代理类
         RpcService helloService = consumerConfig.refer();
         while (true) {
             System.out.println("客户端:" + helloService.say("world"));
             try {
-                Object response = SofaResponseFuture.getResponse(10000, true);
+                Object response = SofaResponseFuture.getResponse(5000, false);
                 System.out.println("客户端:" + response);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
             try {
-                Thread.sleep(2000);
+                Thread.sleep(2000000);
             } catch (Exception e) {
             }
         }

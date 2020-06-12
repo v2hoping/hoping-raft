@@ -1,9 +1,12 @@
 package com.v2hoping.core.server;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.TypeReference;
+import com.alipay.sofa.rpc.api.future.SofaResponseFuture;
 import com.alipay.sofa.rpc.config.ProviderConfig;
 import com.alipay.sofa.rpc.config.ServerConfig;
 import com.v2hoping.common.ConfigureLoader;
+import com.v2hoping.common.RaftExecutor;
 import com.v2hoping.common.RandomUtils;
 import com.v2hoping.core.consensus.AppendLogRequest;
 import com.v2hoping.core.consensus.AppendLogResponse;
@@ -12,6 +15,7 @@ import com.v2hoping.core.consensus.VoteResponse;
 import com.v2hoping.core.log.DefaultLog;
 import com.v2hoping.core.log.Log;
 import com.v2hoping.core.log.LogEntry;
+import com.v2hoping.core.machine.StateMachine;
 import com.v2hoping.core.rpc.DefaultPeer;
 import com.v2hoping.core.rpc.Peer;
 import com.v2hoping.core.rpc.PeerRpc;
@@ -22,12 +26,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.swing.plaf.nimbus.State;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Created by houping wang on 2020/5/13
@@ -104,6 +107,8 @@ public class DefaultServer implements Server {
      */
     private Peer leader;
 
+    private Lock electionLock = new ReentrantLock();
+
     @Override
     public void start() {
         //如果服务已经开启则直接返回，防止重复开启服务
@@ -142,10 +147,10 @@ public class DefaultServer implements Server {
         //日志索引
         nextIndex = new HashMap<>(16);
         matchIndex = new HashMap<>(16);
-        //启动定时器
-
         //启动服务
         this.initServerRpc();
+        //启动定时器
+        this.voteTimer();
     }
 
     private void initServerRpc() {
@@ -172,34 +177,50 @@ public class DefaultServer implements Server {
 
     @Override
     public VoteResponse vote(VoteRequest voteRequest) {
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug(voteRequest.getCandidateId() + " start vote!");
+        }
         VoteResponse voteResponse = new VoteResponse();
         voteResponse.setTerm(currentTerm);
         voteResponse.setVoteGranted(false);
-        //小于当前任期，则拒绝
-        if (voteRequest.getTerm() < currentTerm) {
-            return voteResponse;
-        }
-        //已投票，并且非已投票人选发来请求则拒绝
-        if (this.votedFor != null && !this.votedFor.equals(voteRequest.getCandidateId())) {
-            return voteResponse;
-        }
-        //获取最后一次日志
-        LogEntry lastLog = this.log.getLastLog();
-        if (lastLog != null) {
-            //最新的将被应用
-            if(lastLog.getTerm() > voteRequest.getTerm()) {
+        try {
+            if (!electionLock.tryLock(450, TimeUnit.MILLISECONDS)) {
                 return voteResponse;
             }
-            if(lastLog.getIndex() > voteRequest.getLastLogIndex()) {
+
+            //小于当前任期，则拒绝
+            if (voteRequest.getTerm() < currentTerm) {
                 return voteResponse;
             }
+            //已投票，并且非已投票人选发来请求则拒绝
+            if (this.votedFor != null && !this.votedFor.equals(voteRequest.getCandidateId())) {
+                return voteResponse;
+            }
+            //获取最后一次日志
+            LogEntry lastLog = this.log.getLastLog();
+            if (lastLog != null) {
+                //最新的将被应用
+                if (lastLog.getTerm() > voteRequest.getTerm()) {
+                    return voteResponse;
+                }
+                if (lastLog.getIndex() > voteRequest.getLastLogIndex()) {
+                    return voteResponse;
+                }
+            }
+            //投票成功
+            this.votedFor = voteRequest.getCandidateId();
+            this.leader = this.peerMap.get(this.votedFor);
+            this.state = ServerState.Follower;
+            this.currentTerm = voteRequest.getTerm();
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug(votedFor + " get vote!");
+            }
+        } catch (InterruptedException e) {
+            return voteResponse;
+        } finally {
+            electionLock.unlock();
         }
-        //投票成功
-        this.votedFor = voteRequest.getCandidateId();
-        this.leader = this.peerMap.get(this.votedFor);
-        this.state = ServerState.Follower;
-        this.currentTerm = voteRequest.getTerm();
-        return new VoteResponse();
+        return voteResponse;
     }
 
     @Override
@@ -215,33 +236,103 @@ public class DefaultServer implements Server {
             }
         }, 1, TimeUnit.MILLISECONDS, 1024);
         Integer delay = RandomUtils.nextInt(150, 500);
-        hashedWheelTimer.newTimeout(new TimerTask() {
-            @Override
-            public void run(Timeout timeout) throws Exception {
-                long beginTime = System.currentTimeMillis();
-                //自己投票给自己，转变为候选者
-                if(LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("self change " + ServerState.Candidate);
-                }
-                state = ServerState.Candidate;
-                currentTerm = currentTerm + 1;
-                //发送请求给其他
-                VoteRequest voteRequest = new VoteRequest();
-                voteRequest.setCandidateId(self.getId());
-                LogEntry lastLog = log.getLastLog();
-                voteRequest.setLastLogTerm(lastLog != null ? lastLog.getIndex() : -1);
-                voteRequest.setLastLogIndex(lastLog != null ? lastLog.getIndex() : -1);
-                voteRequest.setTerm(currentTerm);
-                for(Peer peer : peers) {
-                    peer.vote(voteRequest);
-                }
-                //
-                Integer delay = RandomUtils.nextInt(150, 500);
-                timeout.timer().newTimeout(this, delay, TimeUnit.MILLISECONDS);
-            }
-        }, delay, TimeUnit.MILLISECONDS);
+        hashedWheelTimer.newTimeout(new ElectionTimerTask(delay), delay, TimeUnit.MILLISECONDS);
     }
 
+    class ElectionTimerTask implements TimerTask {
 
+        private long delay;
 
+        public ElectionTimerTask(long delay) {
+            this.delay = delay;
+        }
+
+        @Override
+        public void run(Timeout timeout) throws Exception {
+            if (state == ServerState.Leader) {
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("currentTerm:{},self is leader, no run election", currentTerm);
+                }
+            }
+            final long beginTime = System.currentTimeMillis();
+            //自己投票给自己，转变为候选者
+            currentTerm = currentTerm + 1;
+            state = ServerState.Candidate;
+            votedFor = self.getId();
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("currentTerm:" + currentTerm + ",self change " + ServerState.Candidate);
+            }
+            //发送请求给其他服务
+            final VoteRequest voteRequest = new VoteRequest();
+            voteRequest.setCandidateId(self.getId());
+            LogEntry lastLog = log.getLastLog();
+            voteRequest.setLastLogTerm(lastLog != null ? lastLog.getIndex() : -1);
+            voteRequest.setLastLogIndex(lastLog != null ? lastLog.getIndex() : -1);
+            voteRequest.setTerm(currentTerm);
+            final List<Future> futures = new ArrayList<>();
+            for (final Peer peer : peers) {
+                Future future = RaftExecutor.submitElection(new Callable() {
+                    @Override
+                    public Object call() throws Exception {
+                        try {
+                            return peer.vote(voteRequest);
+                        } catch (Exception e) {
+                            LOGGER.error(e.getMessage());
+                            return null;
+                        }
+                    }
+                });
+                futures.add(future);
+            }
+            final long middleTime = System.currentTimeMillis();
+            //异步获得结果
+            final AtomicInteger gainVote = new AtomicInteger();
+            final CountDownLatch latch = new CountDownLatch(futures.size());
+            for (final Future future : futures) {
+                RaftExecutor.submitElection(new Runnable() {
+                    @Override
+                    public void run() {
+                        VoteResponse o = null;
+                        try {
+                            long limit = delay - (middleTime - beginTime);
+                            LOGGER.debug("get value limit time: {}", limit);
+                            o = (VoteResponse) future.get(limit, TimeUnit.MILLISECONDS);
+                            //如果投票成功增加选票
+                            if (o == null) {
+                                return;
+                            }
+                            if (o.getVoteGranted()) {
+                                gainVote.getAndIncrement();
+                            } else {
+                                //更新自己的Term
+                                if (o.getTerm() > currentTerm) {
+                                    currentTerm = o.getTerm();
+                                }
+                            }
+                        } catch (Exception e) {
+                            LOGGER.error(e.getMessage(), e);
+                        } finally {
+                            LOGGER.info("vote result:{}", JSON.toJSONString(o));
+                            latch.countDown();
+                        }
+                    }
+                });
+            }
+            //等待
+            latch.await();
+            //计算投票
+            int halfVote = (peers.size() + 1) / 2;
+            if (gainVote.intValue() + 1 > halfVote) {
+                LOGGER.info("node {} become leader ", self.getId());
+                state = ServerState.Leader;
+                leader = peerMap.get(self.getId());
+                votedFor = "";
+            } else {
+                votedFor = null;
+            }
+            //下一轮投票
+            Integer delay = RandomUtils.nextInt(150, 500);
+            timeout.timer().newTimeout(this, delay, TimeUnit.MILLISECONDS);
+        }
+    }
 }

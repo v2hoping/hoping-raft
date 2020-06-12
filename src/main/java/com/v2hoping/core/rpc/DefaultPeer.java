@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Created by houping wang on 2020/5/22
@@ -71,7 +73,7 @@ public class DefaultPeer implements Peer {
                 .setInterfaceId(PeerRpc.class.getName())
                 // 指定协议
                 .setProtocol("bolt")
-                .setInvokeType("future")
+//                .setInvokeType("future")
                 .setRepeatedReferLimit(-1)
                 // 指定直连地址
                 .setDirectUrl("bolt://" + this.getHost())
